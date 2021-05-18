@@ -1,4 +1,4 @@
 oci-image==1.0.0
 ops>=1.2.0
 serialized-data-interface==0.2.0
-/home/dom/code/kubernetes_wrapper
+git+https://github.com/DomFleischmann/kubernetes-rapper.git
