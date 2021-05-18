@@ -15,7 +15,7 @@ from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus, WaitingStatus, BlockedStatus
 from ops.framework import StoredState
 
-from oci_image import OCIImageResource, OCIImageResourceError
+from kubernetes_wrapper import Kubernetes
 from serialized_data_interface import (
     NoCompatibleVersions,
     NoVersionsListed,
@@ -40,7 +40,6 @@ class Operator(CharmBase):
             self.model.unit.status = WaitingStatus("Waiting for leadership")
             return
         self.log = logging.getLogger(__name__)
-        self.image = OCIImageResource(self, "oci-image")
 
         try:
             self.interfaces = get_interfaces(self)
@@ -60,16 +59,13 @@ class Operator(CharmBase):
         generated_salt = bcrypt.gensalt()
         self._stored.set_default(salt=generated_salt)
         self._stored.set_default(user_id=str(uuid4()))
+        self.kubernetes = Kubernetes(self.model.name)
 
-        for event in [
-            self.on.install,
-            self.on.upgrade_charm,
-            self.on.config_changed,
-            self.on.oidc_client_relation_changed,
-        ]:
-            self.framework.observe(event, self.main)
-
+        self.framework.observe(self.on.dex_auth_pebble_ready, self.pebble_main)
+        self.framework.observe(self.on.config_changed, self.pebble_main)
+        self.framework.observe(self.on.oidc_client_relation_changed, self.pebble_main)
         self.framework.observe(self.on["ingress"].relation_changed, self.send_info)
+        self.framework.observe(self.on.stop, self._on_stop)
 
     def send_info(self, event):
         if self.interfaces["ingress"]:
@@ -82,16 +78,7 @@ class Operator(CharmBase):
                 }
             )
 
-    def main(self, event):
-        try:
-            image_details = self.image.fetch()
-        except OCIImageResourceError as e:
-            self.model.unit.status = e.status
-            self.log.info(e)
-            return
-
-        self.model.unit.status = MaintenanceStatus("Setting pod spec")
-
+    def pebble_main(self, event):
         connectors = yaml.safe_load(self.model.config["connectors"])
         port = self.model.config["port"]
         public_url = self.model.config["public-url"]
@@ -106,6 +93,7 @@ class Operator(CharmBase):
         static_password = self.model.config["static-password"]
 
         static_config = {}
+        self.kubernetes.apply(Path("resources/crds.yaml").read_text())
 
         # Dex needs some way of logging in, so if nothing has been configured,
         # just generate a username/password
@@ -143,69 +131,32 @@ class Operator(CharmBase):
                 **static_config,
             }
         )
-        # Kubernetes won't automatically restart the pod when the configmap changes
-        # unless we manually add the hash somewhere into the Deployment spec, so that
-        # it changes whenever the configmap changes.
-        config_hash = sha256()
-        config_hash.update(config.encode("utf-8"))
 
-        self.model.pod.set_spec(
-            {
-                "version": 3,
-                "serviceAccount": {
-                    "roles": [
-                        {
-                            "global": True,
-                            "rules": [
-                                {
-                                    "apiGroups": ["dex.coreos.com"],
-                                    "resources": ["*"],
-                                    "verbs": ["*"],
-                                },
-                                {
-                                    "apiGroups": ["apiextensions.k8s.io"],
-                                    "resources": ["customresourcedefinitions"],
-                                    "verbs": ["create"],
-                                },
-                            ],
-                        },
-                    ],
-                },
-                "containers": [
-                    {
-                        "name": "dex-auth",
-                        "imageDetails": image_details,
-                        "command": ["dex", "serve", "/etc/dex/cfg/config.yaml"],
-                        "ports": [{"name": "http", "containerPort": port}],
-                        "envConfig": {
-                            "CONFIG_HASH": config_hash.hexdigest(),
-                            "KUBERNETES_POD_NAMESPACE": self.model.name,
-                        },
-                        "volumeConfig": [
-                            {
-                                "name": "config",
-                                "mountPath": "/etc/dex/cfg",
-                                "files": [
-                                    {
-                                        "path": "config.yaml",
-                                        "content": config,
-                                    },
-                                ],
-                            },
-                        ],
-                    }
-                ],
-                "kubernetesResources": {
-                    "customResourceDefinitions": [
-                        {"name": crd["metadata"]["name"], "spec": crd["spec"]}
-                        for crd in yaml.safe_load_all(
-                            Path("resources/crds.yaml").read_text()
-                        )
-                    ],
-                },
-            }
-        )
-        self.model.unit.status = ActiveStatus()
+        container = self.unit.get_container("dex-auth")
+
+        pebble_layer = {
+            "summary": "dex layer",
+            "description": "pebble config layer for dex-auth",
+            "services": {
+                "dex-auth": {
+                    "override": "replace",
+                    "summary": "dex",
+                    "command": "dex serve /etc/dex/cfg/config.yaml",
+                    "startup": "enabled",
+                    "environment": {"KUBERNETES_POD_NAMESPACE": self.model.name},
+                }
+            },
+        }
+        container.make_dir("/etc/dex/cfg", make_parents=True)
+        container.push("/etc/dex/cfg/config.yaml", config)
+        container.add_layer("dex-auth", pebble_layer, combine=True)
+        if container.get_service("dex-auth").is_running():
+            container.stop("dex-auth")
+        container.start("dex-auth")
+        self.unit.status = ActiveStatus()
+
+    def _on_stop(self, event):
+        self.kubernetes.delete(Path("resources/crds.yaml").read_text())
 
 
 if __name__ == "__main__":
