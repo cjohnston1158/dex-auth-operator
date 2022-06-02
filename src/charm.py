@@ -155,34 +155,50 @@ class Operator(CharmBase):
         )
 
     def get_manifest(self):
-        # Handle ingress
-        ingress = self._get_interface("ingress")
+        svc_type_cfg = self.model.config["service-type"].lower()
+        service_type = "ClusterIP"
+        service_port = self.model.config["service-port"]
+        public_url = self.model.config["public-url"].lower()
+        if not public_url.startswith(("http://", "https://")):
+            public_url = f"http://{public_url}"
+        if svc_type_cfg == "ingress":
+            ingress = self._get_interface("ingress")
+            if ingress:
+                for app_name, version in ingress.versions.items():
+                    data = {
+                        "prefix": "/dex",
+                        "rewrite": "/dex",
+                        "service": self.model.app.name,
+                        "port": self.model.config["port"],
+                    }
 
-        if ingress:
-            for app_name, version in ingress.versions.items():
-                data = {
-                    "prefix": "/dex",
-                    "rewrite": "/dex",
-                    "service": self.model.app.name,
-                    "port": self.model.config["port"],
-                }
-
-                ingress.send_data(data, app_name)
+                    ingress.send_data(data, app_name)
+        elif svc_type_cfg == "nodeport":
+            service_type = "NodePort"
+            public_url = f"{public_url}:{service_port}"
+        elif svc_type_cfg == "loadbalancer":
+            service_type = "LoadBalancer"
+            public_url = f"{public_url}:{service_port}"
+        else:
+            self.unit.status = BlockedStatus("Invalid service-type.")
 
         # Get OIDC client info
         oidc = self._get_interface("oidc-client")
+        static_clients_config = self.model.config["static-clients"]
+
+        oidc_client_info = []
+        static_client_info = []
 
         if oidc:
             oidc_client_info = list(oidc.get_data().values())
-        else:
-            oidc_client_info = []
+        if static_clients_config:
+            static_client_info = yaml.safe_load(static_clients_config)
+
+        static_clients = oidc_client_info + static_client_info
 
         # Load config values as convenient variables
         connectors = yaml.safe_load(self.model.config["connectors"])
         port = self.model.config["port"]
-        public_url = self.model.config["public-url"].lower()
-        if not public_url.startswith(("http://", "https://")):
-            public_url = f"http://{public_url}"
         static_username = self.model.config["static-username"] or self.state.username
         static_password = self.model.config["static-password"] or self.state.password
         static_password = static_password.encode("utf-8")
@@ -207,7 +223,7 @@ class Operator(CharmBase):
                 "web": {"http": f"0.0.0.0:{port}"},
                 "logger": {"level": "debug", "format": "text"},
                 "oauth2": {"skipApprovalScreen": True},
-                "staticClients": oidc_client_info,
+                "staticClients": static_clients,
                 "connectors": connectors,
                 **static_config,
             }
@@ -223,6 +239,9 @@ class Operator(CharmBase):
             "name": self.model.app.name.replace("-operator", ""),
             "namespace": self.model.name,
             "port": self.model.config["port"],
+            "service_type": service_type,
+            "service_port": service_port,
+            "image": self.model.config["image"],
             "config_yaml": config,
             "config_hash": config_hash.hexdigest(),
         }

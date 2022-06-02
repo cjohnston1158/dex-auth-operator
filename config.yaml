@@ -24,3 +24,30 @@ options:
     type: string
     default: ''
     description: Static password for logging in without an external auth service
+  service-type:
+    type: string
+    default: 'Ingress'
+    description: |
+      Valid options are:
+      NodePort, LoadBalancer, Ingress
+  service-port:
+    type: int
+    default: 31000
+    description: Service port, used when service-type is defined as NodePort.
+  tls-secret-name:
+    type: string
+    description: |
+      The name of the Kubernetes secret to be associated with the ingress resource.
+
+      This setting is ignored unless site_url begins with "https".
+    default: ''
+  image:
+    type: string
+    description: The docker image to install. Required.
+    default: 'quay.io/dexidp/dex:v2.28.1'
+  static-clients:
+    type: string
+    default: ''
+    description: |
+      List of static clients in YAML format, as shown
+      in https://dexidp.io/docs/custom-scopes-claims-clients/
