@@ -155,12 +155,14 @@ class Operator(CharmBase):
         )
 
     def get_manifest(self):
-        svc_type_cfg = self.model.config["service-type"].lower()
-        service_type = "ClusterIP"
-        service_port = self.model.config["service-port"]
         public_url = self.model.config["public-url"].lower()
         if not public_url.startswith(("http://", "https://")):
             public_url = f"http://{public_url}"
+
+        # Handle ingress
+        svc_type_cfg = self.model.config["service-type"].lower()
+        service_type = "ClusterIP"
+        service_port = self.model.config["service-port"]
         if svc_type_cfg == "ingress":
             ingress = self._get_interface("ingress")
             if ingress:
@@ -178,7 +180,7 @@ class Operator(CharmBase):
             public_url = f"{public_url}:{service_port}"
         elif svc_type_cfg == "loadbalancer":
             service_type = "LoadBalancer"
-            public_url = f"{public_url}:{service_port}"
+            public_url = f"{public_url}"
         else:
             self.unit.status = BlockedStatus("Invalid service-type.")
 
@@ -199,6 +201,9 @@ class Operator(CharmBase):
         # Load config values as convenient variables
         connectors = yaml.safe_load(self.model.config["connectors"])
         port = self.model.config["port"]
+        target_port = self.model.config["port"]
+
+        # Handle static config
         static_username = self.model.config["static-username"] or self.state.username
         static_password = self.model.config["static-password"] or self.state.password
         static_password = static_password.encode("utf-8")
@@ -216,11 +221,26 @@ class Operator(CharmBase):
             ],
         }
 
+        # Handle TLS
+        tls_secret = self.model.config["tls-secret-name"]
+        if tls_secret and svc_type_cfg == "loadbalancer":
+            port = 443
+            web = {
+                "https": f"0.0.0.0:{target_port}",
+                "tlsCert": "/certs/tls.crt",
+                "tlsKey": "/certs/tls.key",
+            }
+            if not public_url.startswith("https://"):
+                public_url = public_url.replace("http", "https")
+        else:
+            port = 80
+            web = {"http": f"0.0.0.0:{target_port}"}
+
         config = json.dumps(
             {
                 "issuer": f"{public_url}/dex",
                 "storage": {"type": "kubernetes", "config": {"inCluster": True}},
-                "web": {"http": f"0.0.0.0:{port}"},
+                "web": web,
                 "logger": {"level": "debug", "format": "text"},
                 "oauth2": {"skipApprovalScreen": True},
                 "staticClients": static_clients,
@@ -238,13 +258,17 @@ class Operator(CharmBase):
         context = {
             "name": self.model.app.name.replace("-operator", ""),
             "namespace": self.model.name,
-            "port": self.model.config["port"],
+            "port": port,
+            "target_port": target_port,
             "service_type": service_type,
             "service_port": service_port,
             "image": self.model.config["image"],
             "config_yaml": config,
             "config_hash": config_hash.hexdigest(),
         }
+
+        if tls_secret and svc_type_cfg == "loadbalancer":
+            context.update({"tls_secret": tls_secret})
 
         return [
             obj

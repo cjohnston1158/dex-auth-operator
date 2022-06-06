@@ -6,10 +6,14 @@ metadata:
 spec:
   type: {{ service_type }}
   ports:
-  - name: {{ name }}
+  {% if tls_secret %}
+  - name: https
+  {% else %}
+  - name: http
+  {% endif %}
     port: {{ port }}
     protocol: TCP
-    targetPort: {{ port }}
+    targetPort: {{ target_port }}
     {% if service_type == "NodePort" %}
     nodePort: {{ service_port }}
     {% endif %}

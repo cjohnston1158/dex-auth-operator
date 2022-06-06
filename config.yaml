@@ -44,7 +44,7 @@ options:
   image:
     type: string
     description: The docker image to install. Required.
-    default: 'quay.io/dexidp/dex:v2.28.1'
+    default: 'ghcr.io/dexidp/dex:v2.31.2'
   static-clients:
     type: string
     default: ''
