@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ name }}-charm
+  name: {{ name }}-workload
 spec:
   type: {{ service_type }}
   ports:
@@ -14,9 +14,6 @@ spec:
     port: {{ port }}
     protocol: TCP
     targetPort: {{ target_port }}
-    {% if service_type == "NodePort" %}
-    nodePort: {{ service_port }}
-    {% endif %}
   selector:
-    app.kubernetes.io/name: {{ name }}-charm
+    app.kubernetes.io/name: {{ name }}-workload
 

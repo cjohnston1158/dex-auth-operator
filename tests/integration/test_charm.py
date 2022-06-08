@@ -22,7 +22,18 @@ from tenacity import (
 
 log = logging.getLogger(__name__)
 METADATA = yaml.safe_load(Path("./metadata.yaml").read_text())
+
+# Charms
 dex_auth = METADATA["name"]
+oidc_gatekeeper = "oidc-gatekeeper"
+istio_pilot = "istio-pilot"
+istio_gateway = "istio-gateway"
+prometheus = "prometheus-k8s"
+grafana = "grafana-k8s"
+
+workload_name = dex_auth + "-workload"
+
+# Configs
 DEX_CONFIG = {
     "static-username": "admin",
     "static-password": "foobar",
@@ -33,6 +44,18 @@ OIDC_CONFIG = {
     "client-name": client_name,
     "client-secret": secret,
 }
+secret = "".join(choices(ascii_uppercase + digits, k=30))
+STATIC_CLIENT_CONFIG = yaml.dump(
+    [{
+        "name": "test-client",
+        "id": "test-id",
+        "secret": secret,
+        "redirectURIs": [
+            "http://localhost:8000",
+            "http://localhost:18000",
+        ],
+    }]
+)
 
 
 @pytest.mark.abort_on_fail
@@ -47,8 +70,6 @@ async def test_build_and_deploy(ops_test):
 
 @pytest.mark.abort_on_fail
 async def test_relations(ops_test: OpsTest):
-    oidc_gatekeeper = "oidc-gatekeeper"
-    istio_pilot = "istio-pilot"
     public_url = "http://1.2.3.4"
     await ops_test.model.deploy(oidc_gatekeeper, channel="latest/edge", config=OIDC_CONFIG)
     await ops_test.model.deploy(istio_pilot, channel="1.5/stable")
@@ -61,6 +82,7 @@ async def test_relations(ops_test: OpsTest):
     await ops_test.model.wait_for_idle(
         [dex_auth, oidc_gatekeeper, istio_pilot],
         status="active",
+        wait_for_active=True,
         raise_on_blocked=True,
         raise_on_error=True,
         timeout=600,
@@ -73,15 +95,14 @@ async def test_relations(ops_test: OpsTest):
         https://github.com/canonical/oidc-gatekeeper-operator/issues/27
     """
     lightkube_client = Client(namespace=ops_test.model_name)
-    cm = lightkube_client.get(ConfigMap, "dex-auth-charm")
+    cm = lightkube_client.get(ConfigMap, workload_name)
     # assert secret in cm.data['config.yaml']
+    assert public_url in cm.data['config.yaml']
     assert client_name in cm.data['config.yaml']
 
 
 async def test_prometheus_grafana_integration(ops_test: OpsTest):
     """Deploy prometheus, grafana and required relations, then test the metrics."""
-    prometheus = "prometheus-k8s"
-    grafana = "grafana-k8s"
     prometheus_scrape_charm = "prometheus-scrape-config-k8s"
     scrape_config = {"scrape_interval": "5s"}
 

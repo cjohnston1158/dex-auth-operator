@@ -2,7 +2,6 @@
 # Copyright 2021 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-import json
 import logging
 import subprocess
 from functools import wraps
@@ -89,6 +88,8 @@ class Operator(CharmBase):
 
         self._max_time_checking_resources = 150
 
+        self._workload_service_name = self.model.app.name + "-workload"
+
     @only_leader
     def main(self, event):
         self.model.unit.status = MaintenanceStatus("Calculating manifests")
@@ -162,7 +163,6 @@ class Operator(CharmBase):
         # Handle ingress
         svc_type_cfg = self.model.config["service-type"].lower()
         service_type = "ClusterIP"
-        service_port = self.model.config["service-port"]
         if svc_type_cfg == "ingress":
             ingress = self._get_interface("ingress")
             if ingress:
@@ -170,14 +170,11 @@ class Operator(CharmBase):
                     data = {
                         "prefix": "/dex",
                         "rewrite": "/dex",
-                        "service": self.model.app.name,
+                        "service": self._workload_service_name,
                         "port": self.model.config["port"],
                     }
 
                     ingress.send_data(data, app_name)
-        elif svc_type_cfg == "nodeport":
-            service_type = "NodePort"
-            public_url = f"{public_url}:{service_port}"
         elif svc_type_cfg == "loadbalancer":
             service_type = "LoadBalancer"
             public_url = f"{public_url}"
@@ -223,6 +220,7 @@ class Operator(CharmBase):
 
         # Handle TLS
         tls_secret = self.model.config["tls-secret-name"]
+        web = {"http": f"0.0.0.0:{target_port}"}
         if tls_secret and svc_type_cfg == "loadbalancer":
             port = 443
             web = {
@@ -232,11 +230,10 @@ class Operator(CharmBase):
             }
             if not public_url.startswith("https://"):
                 public_url = public_url.replace("http", "https")
-        else:
+        elif svc_type_cfg == "loadbalancer":
             port = 80
-            web = {"http": f"0.0.0.0:{target_port}"}
 
-        config = json.dumps(
+        config = yaml.dump(
             {
                 "issuer": f"{public_url}/dex",
                 "storage": {"type": "kubernetes", "config": {"inCluster": True}},
@@ -261,7 +258,6 @@ class Operator(CharmBase):
             "port": port,
             "target_port": target_port,
             "service_type": service_type,
-            "service_port": service_port,
             "image": self.model.config["image"],
             "config_yaml": config,
             "config_hash": config_hash.hexdigest(),

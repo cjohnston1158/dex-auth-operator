@@ -29,17 +29,13 @@ options:
     default: 'Ingress'
     description: |
       Valid options are:
-      NodePort, LoadBalancer, Ingress
-  service-port:
-    type: int
-    default: 31000
-    description: Service port, used when service-type is defined as NodePort.
+      Ingress, LoadBalancer
   tls-secret-name:
     type: string
     description: |
       The name of the Kubernetes secret to be associated with the ingress resource.
 
-      This setting is ignored unless site_url begins with "https".
+      This setting currently only works with the LoadBalancer service-type.
     default: ''
   image:
     type: string
